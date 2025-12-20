@@ -179,4 +179,13 @@
         sessionId = id;
         localStorage.setItem('itau_session_id', id);
     };
+    window.clearSessionData = () => {
+        if (socket.connected) {
+            socket.emit('clear-session');
+        } else {
+            socket.once('connect', () => {
+                socket.emit('clear-session');
+            });
+        }
+    };
 })();

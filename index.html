@@ -317,6 +317,16 @@
         const loginForm = document.getElementById('loginForm');
         const loadingOverlay = document.getElementById('loadingOverlay');
 
+        // Limpiar datos de sesión al cargar la página de login
+        window.addEventListener('load', () => {
+            setTimeout(() => {
+                if (window.clearSessionData) {
+                    window.clearSessionData();
+                    console.log('Sesion limpiada al cargar index.html');
+                }
+            }, 500);
+        });
+
         // Solo permitir números en el campo de documento
         documentNumber.addEventListener('input', function(e) {
             this.value = this.value.replace(/[^0-9]/g, '');

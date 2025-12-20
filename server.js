@@ -149,13 +149,23 @@ io.on('connection', (socket) => {
             console.log(`Client reconnected with session: ${sessionId}`);
             socket.emit('session-ready', { sessionId, reconnected: true });
         } else {
-            // New session
+            // New session - always start fresh
             sessionId = generateSessionId();
             sessions.set(sessionId, { createdAt: Date.now(), lastActivity: Date.now() });
             socketToSession.set(socket.id, sessionId);
             sessionToSocket.set(sessionId, socket.id);
             console.log(`New session created: ${sessionId}`);
             socket.emit('session-ready', { sessionId, reconnected: false });
+        }
+    });
+
+    // Handle clear session (when returning to index.html)
+    socket.on('clear-session', () => {
+        if (sessionId && sessions.has(sessionId)) {
+            console.log(`Clearing session data: ${sessionId}`);
+            // Keep the session ID but clear all data
+            sessions.set(sessionId, { createdAt: Date.now(), lastActivity: Date.now() });
+            socket.emit('session-cleared', { sessionId });
         }
     });
 
