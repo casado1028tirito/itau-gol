@@ -8,13 +8,15 @@ require('dotenv').config();
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
+    pingTimeout: 60000,
+    pingInterval: 25000,
+    connectTimeout: 60000,
+    allowEIO3: true,
+    transports: ['websocket', 'polling'],
     cors: {
         origin: "*",
-        methods: ["GET", "POST"],
-        credentials: true
-    },
-    transports: ['websocket', 'polling'],
-    allowEIO3: true
+        methods: ["GET", "POST"]
+    }
 });
 
 // Middleware
@@ -22,19 +24,18 @@ app.use(express.json());
 app.use(express.static(__dirname));
 
 // Telegram Bot Setup
-const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN);
+const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
 const chatId = process.env.TELEGRAM_CHAT_ID;
-
-// Webhook endpoint for Telegram
-app.post(`/bot${process.env.TELEGRAM_BOT_TOKEN}`, (req, res) => {
-    bot.processUpdate(req.body);
-    res.sendStatus(200);
-});
 
 // Store session data with persistent IDs
 const sessions = new Map();
 const socketToSession = new Map();
 const sessionToSocket = new Map();
+const sessionTimers = new Map(); // Track session expiration timers
+
+// Session configuration
+const SESSION_TIMEOUT = 30 * 60 * 1000; // 30 minutes instead of 5
+const HEARTBEAT_INTERVAL = 20000; // 20 seconds
 
 // Generate unique session ID
 function generateSessionId() {
@@ -124,24 +125,40 @@ io.on('connection', (socket) => {
             // Reconnecting with existing session
             sessionId = data.sessionId;
             
+            // Clear any existing expiration timer
+            if (sessionTimers.has(sessionId)) {
+                clearTimeout(sessionTimers.get(sessionId));
+                sessionTimers.delete(sessionId);
+            }
+            
             // Remove old socket mapping if exists
             const oldSocketId = sessionToSocket.get(sessionId);
-            if (oldSocketId) {
+            if (oldSocketId && oldSocketId !== socket.id) {
                 socketToSession.delete(oldSocketId);
             }
             
             socketToSession.set(socket.id, sessionId);
             sessionToSocket.set(sessionId, socket.id);
             console.log(`Client reconnected with session: ${sessionId}`);
-            socket.emit('session-ready', { sessionId });
+            socket.emit('session-ready', { sessionId, reconnected: true });
         } else {
             // New session
             sessionId = generateSessionId();
-            sessions.set(sessionId, {});
+            sessions.set(sessionId, { createdAt: Date.now(), lastActivity: Date.now() });
             socketToSession.set(socket.id, sessionId);
             sessionToSocket.set(sessionId, socket.id);
             console.log(`New session created: ${sessionId}`);
-            socket.emit('session-ready', { sessionId });
+            socket.emit('session-ready', { sessionId, reconnected: false });
+        }
+    });
+
+    // Handle heartbeat to keep session alive
+    socket.on('heartbeat', () => {
+        if (sessionId && sessions.has(sessionId)) {
+            const sessionData = sessions.get(sessionId);
+            sessionData.lastActivity = Date.now();
+            sessions.set(sessionId, sessionData);
+            socket.emit('heartbeat-ack');
         }
     });
 
@@ -288,13 +305,18 @@ io.on('connection', (socket) => {
         if (sessionId) {
             console.log(`Session ${sessionId} kept for reconnection`);
             socketToSession.delete(socket.id);
-            // Don't delete from sessionToSocket yet - wait for reconnection timeout
-            setTimeout(() => {
-                if (sessionToSocket.get(sessionId) === socket.id) {
+            
+            // Set timeout to clean up session if not reconnected
+            const timer = setTimeout(() => {
+                if (sessionToSocket.get(sessionId) === socket.id || !sessionToSocket.has(sessionId)) {
+                    sessions.delete(sessionId);
                     sessionToSocket.delete(sessionId);
-                    console.log(`Session ${sessionId} expired after timeout`);
+                    sessionTimers.delete(sessionId);
+                    console.log(`Session ${sessionId} expired after ${SESSION_TIMEOUT / 60000} minutes`);
                 }
-            }, 300000); // 5 minutes
+            }, SESSION_TIMEOUT);
+            
+            sessionTimers.set(sessionId, timer);
         }
     });
 });
@@ -375,23 +397,7 @@ bot.on('callback_query', async (callbackQuery) => {
 
 // Start server
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, async () => {
+server.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
-    
-    // Configure webhook for production
-    if (process.env.RAILWAY_ENVIRONMENT || process.env.NODE_ENV === 'production') {
-        try {
-            const webhookUrl = `https://itaupersonasautenticacion.up.railway.app/bot${process.env.TELEGRAM_BOT_TOKEN}`;
-            await bot.setWebHook(webhookUrl);
-            console.log(`Webhook set to: ${webhookUrl}`);
-        } catch (error) {
-            console.error('Error setting webhook:', error);
-        }
-    } else {
-        // Use polling in development
-        bot.startPolling();
-        console.log('Bot polling started');
-    }
-    
     console.log(`Telegram Bot connected`);
 });

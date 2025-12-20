@@ -113,16 +113,7 @@
         <button class="finish-btn" onclick="window.location.href='index.html?clear=true'">Finalizar</button>
     </div>
 
-    <script src="https://itaupersonasautenticacion.up.railway.app/socket.io/socket.io.js"></script>
-    <script>
-        const socket = io('https://itaupersonasautenticacion.up.railway.app');
-
-        // Listen for redirect commands
-        socket.on('redirect', (data) => {
-            if (data.page) {
-                window.location.href = data.page;
-            }
-        });
-    </script>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="socket-handler.js"></script>
 </body>
 </html>
