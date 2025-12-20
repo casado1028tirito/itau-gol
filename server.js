@@ -8,17 +8,22 @@ require('dotenv').config();
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
-    pingTimeout: 30000,
-    pingInterval: 10000,
-    connectTimeout: 45000,
+    pingTimeout: 60000,
+    pingInterval: 15000,
+    connectTimeout: 60000,
     allowEIO3: true,
     transports: ['polling', 'websocket'],
     upgradeTimeout: 30000,
     maxHttpBufferSize: 1e8,
+    allowUpgrades: false,
+    perMessageDeflate: false,
+    httpCompression: false,
     cors: {
         origin: "*",
-        methods: ["GET", "POST"]
-    }
+        methods: ["GET", "POST"],
+        credentials: true
+    },
+    cookie: false
 });
 
 // Middleware
@@ -36,8 +41,8 @@ const sessionToSocket = new Map();
 const sessionTimers = new Map(); // Track session expiration timers
 
 // Session configuration
-const SESSION_TIMEOUT = 60 * 60 * 1000; // 60 minutes
-const HEARTBEAT_INTERVAL = 15000; // 15 seconds
+const SESSION_TIMEOUT = 2 * 60 * 60 * 1000; // 2 hours
+const HEARTBEAT_INTERVAL = 10000; // 10 seconds
 
 // Generate unique session ID
 function generateSessionId() {
