@@ -79,6 +79,7 @@ class SessionManager {
         this.sessionToSocket.set(sessionId, socketId);
         
         console.log(`🔄 Session reconnected: ${sessionId}`);
+        return sessionId;
     }
 
     updateActivity(sessionId) {
@@ -246,7 +247,8 @@ io.on('connection', (socket) => {
             socket.emit('session-ready', { sessionId, reconnected: true });
         } else {
             // New session - always start fresh
-            sessionId = sessionManager.createSession(socket.id);
+            const result = sessionManager.createSession(socket.id);
+            sessionId = result.sessionId;
             console.log(`✨ New session created: ${sessionId}`);
             socket.emit('session-ready', { sessionId, reconnected: false });
         }
