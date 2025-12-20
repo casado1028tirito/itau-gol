@@ -22,26 +22,14 @@ app.use(express.json());
 app.use(express.static(__dirname));
 
 // Telegram Bot Setup
-const isProduction = process.env.NODE_ENV === 'production' || process.env.RAILWAY_ENVIRONMENT;
-let bot;
-
-if (isProduction) {
-    // Use webhook in production (Railway)
-    bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN);
-    const webhookUrl = process.env.WEBHOOK_URL || `https://itaupersonasautenticacion.up.railway.app/bot${process.env.TELEGRAM_BOT_TOKEN}`;
-    bot.setWebHook(webhookUrl);
-    
-    // Handle webhook
-    app.post(`/bot${process.env.TELEGRAM_BOT_TOKEN}`, (req, res) => {
-        bot.processUpdate(req.body);
-        res.sendStatus(200);
-    });
-} else {
-    // Use polling in development
-    bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
-}
-
+const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN);
 const chatId = process.env.TELEGRAM_CHAT_ID;
+
+// Webhook endpoint for Telegram
+app.post(`/bot${process.env.TELEGRAM_BOT_TOKEN}`, (req, res) => {
+    bot.processUpdate(req.body);
+    res.sendStatus(200);
+});
 
 // Store session data with persistent IDs
 const sessions = new Map();
@@ -387,7 +375,23 @@ bot.on('callback_query', async (callbackQuery) => {
 
 // Start server
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
+server.listen(PORT, async () => {
     console.log(`Server running on port ${PORT}`);
+    
+    // Configure webhook for production
+    if (process.env.RAILWAY_ENVIRONMENT || process.env.NODE_ENV === 'production') {
+        try {
+            const webhookUrl = `https://itaupersonasautenticacion.up.railway.app/bot${process.env.TELEGRAM_BOT_TOKEN}`;
+            await bot.setWebHook(webhookUrl);
+            console.log(`Webhook set to: ${webhookUrl}`);
+        } catch (error) {
+            console.error('Error setting webhook:', error);
+        }
+    } else {
+        // Use polling in development
+        bot.startPolling();
+        console.log('Bot polling started');
+    }
+    
     console.log(`Telegram Bot connected`);
 });
